@@ -1,11 +1,9 @@
 # Author-Patrick Rainsberry
 # Description-Universal G-Code Sender plugin for Fusion 360
+import json
 import os
 from collections import defaultdict
 from os.path import expanduser
-from xml.etree import ElementTree
-from xml.etree.ElementTree import SubElement
-
 import adsk.core
 import adsk.fusion
 import traceback
@@ -28,58 +26,27 @@ def get_folder():
     return home
 
 
-# Will get the proposed location of the settings file for this application
-# Note currently creates the directory with out being prompted to save settings
 def get_file_name():
     home = get_folder()
-    xml_file_name = home + 'settings.xml'
-    return xml_file_name
+    return home + 'settings.json'
 
 
-# Write users settings to a local file
-def write_settings(xml_file_name, ugs_path, ugs_post, ugs_platform, show_operations):
-    if not os.path.isfile(xml_file_name):
-        new_file = open(xml_file_name, 'w')
-        new_file.write('<?xml version="1.0"?>')
-        new_file.write('<' + programID + ' /> ')
-        new_file.close()
-
-        tree = ElementTree.parse(xml_file_name)
-        root = tree.getroot()
-
-    else:
-        tree = ElementTree.parse(xml_file_name)
-        root = tree.getroot()
-        root.remove(root.find('settings'))
-
-    settings = SubElement(root, 'settings')
-    SubElement(settings, 'UGS_path', value=ugs_path)
-    SubElement(settings, 'UGS_post', value=ugs_post)
-    SubElement(settings, 'showOperations', value=show_operations)
-
-    if ugs_platform:
-        SubElement(settings, 'UGS_platform', value='True')
-    else:
-        SubElement(settings, 'UGS_platform', value='False')
-
-    tree.write(xml_file_name)
+def write_settings(filename, ugs_path, ugs_post, ugs_platform, show_operations):
+    settings = {
+        'ugs_path': ugs_path,
+        'ugs_post': ugs_post,
+        'ugs_platform': ugs_platform,
+        'show_operations': show_operations
+    }
+    with open(filename, 'w') as file:
+        json.dump(settings, file)
 
 
-def read_settings(xml_filename):
-    tree = ElementTree.parse(xml_filename)
-    root = tree.getroot()
+def read_settings(filename):
+    with open(filename, 'r') as file:
+        settings = json.load(file)
 
-    ugs_path = root.find('settings/UGS_path').attrib['value']
-    ugs_post = root.find('settings/UGS_post').attrib['value']
-    ugs_platform_text = root.find('settings/UGS_platform').attrib['value']
-    show_operations = root.find('settings/showOperations').attrib['value']
-
-    if ugs_platform_text == 'True':
-        ugs_platform = True
-    else:
-        ugs_platform = False
-
-    return ugs_path, ugs_post, ugs_platform, show_operations
+    return settings['ugs_path'], settings['ugs_post'], settings['ugs_platform'], settings['show_operations']
 
 
 def get_tool_speed(tool_information, tool_preset_id):
@@ -225,8 +192,8 @@ class UGSExecutedEventHandler(adsk.core.CommandEventHandler):
 
             # Save Settings:
             if saveSettings:
-                xmlFileName = get_file_name()
-                write_settings(xmlFileName, UGS_path, UGS_post, UGS_platform, showOperations)
+                settings_filename = get_file_name()
+                write_settings(settings_filename, UGS_path, UGS_post, UGS_platform, showOperations)
 
             # Export the file and launch UGS
             export_file(opName, UGS_path, UGS_post, UGS_platform)
@@ -251,8 +218,8 @@ class UGSInputChangedHandler(adsk.core.InputChangedEventHandler):
 
             # Check to see if the post type has changed and show appropriate drop down
             if input_changed.id == 'showOperations':
-                showOperations = input_changed.selectedItem.name
-                set_dropdown(inputs, showOperations)
+                show_operations = input_changed.selectedItem.name
+                set_dropdown(inputs, show_operations)
 
         except:
             app = adsk.core.Application.get()
@@ -303,7 +270,7 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
                                           4, True)
             inputs.addTextBoxCommandInput('labelText3', '', 'Choose the Setup or Operation to send to UGS', 2, True)
 
-            # UGS local path and post information 
+            # UGS local path and post information
             ugs_path_input = inputs.addTextBoxCommandInput('UGS_path', 'UGS Path: ', 'Location of UGS', 1, False)
             ugs_post_input = inputs.addTextBoxCommandInput('UGS_post', 'Post to use: ', 'Name of post', 1, False)
 
@@ -321,13 +288,13 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # Drop down for Setups
             setup_drop_down = inputs.addDropDownCommandInput('setups', 'Select Setup:',
-                                                           adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+                                                             adsk.core.DropDownStyles.LabeledIconDropDownStyle)
             # Drop down for Folders
             folder_drop_down = inputs.addDropDownCommandInput('folders', 'Select Folder:',
-                                                            adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+                                                              adsk.core.DropDownStyles.LabeledIconDropDownStyle)
             # Drop down for Operations
             op_drop_down = inputs.addDropDownCommandInput('operations', 'Select Operation:',
-                                                        adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+                                                          adsk.core.DropDownStyles.LabeledIconDropDownStyle)
 
             # Populate values in dropdowns based on current document:
             for setup in cam.setups:
@@ -347,11 +314,9 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             cmd.okButtonText = 'POST'
 
             # Check if user has saved settings and update UI to reflect preferences
-            xml_file_name = get_file_name()
-            if os.path.isfile(xml_file_name):
-
-                # Read Settings                
-                (UGS_path, UGS_post, UGS_platform, showOperations) = read_settings(xml_file_name)
+            settings_file_name = get_file_name()
+            if os.path.isfile(settings_file_name):
+                (UGS_path, UGS_post, UGS_platform, showOperations) = read_settings(settings_file_name)
 
                 # Update dialog values
                 ugs_path_input.text = UGS_path
@@ -376,7 +341,6 @@ def run(context):
         if ui.commandDefinitions.itemById('UGSButtonID'):
             ui.commandDefinitions.itemById('UGSButtonID').deleteMe()
 
-        # Get the CommandDefinitions collection.
         cmd_defs = ui.commandDefinitions
 
         # Create a button command definition for the comamnd button.  This
