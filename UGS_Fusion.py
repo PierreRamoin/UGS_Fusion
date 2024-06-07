@@ -1,5 +1,7 @@
 #Author-Patrick Rainsberry
 #Description-Universal G-Code Sender plugin for Fusion 360
+import json
+from collections import defaultdict
 
 import adsk.core, traceback
 import adsk.fusion
@@ -104,7 +106,13 @@ def readSettings(xmlFileName):
 
     return(UGS_path, UGS_post, UGS_platform, showOperations)
 
-# Post process selected operation and launch UGS
+
+def getToolSpeed(tool_information, tool_preset_id):
+    for preset in tool_information['start-values']['presets']:
+        if preset['guid'] == tool_preset_id:
+            return preset['n']
+
+
 def exportFile(opName, UGS_path, UGS_post, UGS_platform):
 
     app = adsk.core.Application.get()
@@ -112,20 +120,27 @@ def exportFile(opName, UGS_path, UGS_post, UGS_platform):
     products = doc.products
     product = products.itemByProductType('CAMProductType')
     cam = adsk.cam.CAM.cast(product)
+    toPosts = []
+    resultFilenames = []
+    parent_file_count = defaultdict(int)
 
     # Iterate through CAM objects for operation, folder or setup
     # Currently doesn't handle duplicate in names
     for setup in cam.setups:
         if setup.name == opName:
-            toPost = setup
+            toPosts += setup
         else:
             for folder in setup.folders:
                 if folder.name == opName:
-                    toPost = folder       
+                    toPosts += folder
    
     for operation in cam.allOperations:
         if operation.name == opName:
-            toPost = operation
+            toPosts += operation
+
+    if opName == "ALL":
+        for operation in cam.allOperations:
+            toPosts.append(operation)
             
     # Create a temporary directory for post file
     # outputFolder = tempfile.mkdtemp()
@@ -136,22 +151,19 @@ def exportFile(opName, UGS_path, UGS_post, UGS_platform):
     postConfig = os.path.join(cam.genericPostFolder, UGS_post) 
     units = adsk.cam.PostOutputUnitOptions.DocumentUnitsOutput
 
-    # create the postInput object
-    postInput = adsk.cam.PostProcessInput.create(opName, postConfig, outputFolder, units)
-    postInput.isOpenInEditor = False
-    cam.postProcess(toPost, postInput)
-    
-    # Get the resulting filename
-    resultFilename = outputFolder + '//' + opName
-    resultFilename = resultFilename + '.nc'
+    for toPost in toPosts:
+        parent_name = toPost.parent.name if toPost.parent is not None else ''
+        outputFolderPost = f"{outputFolder}//{parent_name}"
+        filename = f"{parent_file_count[parent_name]} - {toPost.name} - {toPost.tool.parameters.itemByName('tool_productId').value.value}_{toPost.tool.parameters.itemByName('tool_diameter').value.value:.3f}{toPost.tool.parameters.itemByName('tool_unit').value.value} ({int(toPost.tool.parameters.itemByName('tool_spindleSpeed').value.value)} rpm)"
+        postInput = adsk.cam.PostProcessInput.create(filename, postConfig, outputFolderPost, units)
+        postInput.isOpenInEditor = False
+        cam.postProcess(toPost, postInput)
+        parent_file_count[parent_name] += 1
 
-    # Use subprocess to launch UGS in a new process, check if platform or java
-    if UGS_platform:
-        subprocess.Popen([UGS_path, '--open', '%s' % resultFilename])
-    else:
-        subprocess.Popen(['java', '-jar', UGS_path, '--open', '%s'% resultFilename])
-   
-    return resultFilename
+        # Get the resulting filename
+        resultFilenames += f"{outputFolderPost}/{toPost.name}.nc"
+
+    return resultFilenames
 
 # Get the current values of the command inputs.
 def getInputs(inputs):
@@ -188,6 +200,8 @@ def getInputs(inputs):
             opName = folderName
         elif (showOperations == 'Operations'):
             opName = operationName
+        elif (showOperations == 'All Operations'):
+            opName = "ALL"
 
         return (opName, UGS_path, UGS_post, UGS_platform, saveSettings, showOperations)
 
@@ -217,6 +231,11 @@ def setDropdown(inputs, showOperations):
         folderInput.isVisible = False 
         operationInput.isVisible = True
         showOperationsInput.listItems[2].isSelected = True
+    elif (showOperations == 'All Operations'):
+        setupInput.isVisible = False
+        folderInput.isVisible = False
+        operationInput.isVisible = False
+        showOperationsInput.listItems[3].isSelected = True
     else:
         # TODO add error check
         return
@@ -320,6 +339,7 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             radioButtonItems.add("Setups", False)
             radioButtonItems.add("Folders", False)
             radioButtonItems.add("Operations", False)
+            radioButtonItems.add("All Operations", False)
 
             # Drop down for Setups
             setupDropDown = inputs.addDropDownCommandInput('setups', 'Select Setup:', adsk.core.DropDownStyles.LabeledIconDropDownStyle)
