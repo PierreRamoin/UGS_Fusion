@@ -1,18 +1,14 @@
-#Author-Patrick Rainsberry
-#Description-Universal G-Code Sender plugin for Fusion 360
-import json
+# Author-Patrick Rainsberry
+# Description-Universal G-Code Sender plugin for Fusion 360
+import os
 from collections import defaultdict
-
-import adsk.core, traceback
-import adsk.fusion
-
+from os.path import expanduser
 from xml.etree import ElementTree
 from xml.etree.ElementTree import SubElement
 
-from os.path import expanduser
-import os
-import tempfile
-import subprocess
+import adsk.core
+import adsk.fusion
+import traceback
 
 # Global Variable to handle command events
 handlers = []
@@ -24,11 +20,8 @@ programID = 'UGS_Fusion'
 def get_folder():
     # Get user's home directory
     home = expanduser("~")
-
-    # Create a subdirectory for this application settings
     home += '/' + programID + '/'
 
-    # Create the folder if it does not exist
     if not os.path.exists(home):
         os.makedirs(home)
 
@@ -37,238 +30,219 @@ def get_folder():
 
 # Will get the proposed location of the settings file for this application
 # Note currently creates the directory with out being prompted to save settings
-def getFileName():
-    
+def get_file_name():
     home = get_folder()
-    
-    # Get full path for the settings file
-    xmlFileName = home  + 'settings.xml'
-    
-    return xmlFileName
+    xml_file_name = home + 'settings.xml'
+    return xml_file_name
 
-# Write users settings to a local file 
-def writeSettings(xmlFileName, UGS_path, UGS_post, UGS_platform, showOperations):
-    
-    # If the file does not exist create it
-    if not os.path.isfile(xmlFileName):
-        # Create the file
-        new_file = open( xmlFileName, 'w' )                        
-        new_file.write( '<?xml version="1.0"?>' )
-        new_file.write( '<' + programID + ' /> ')
+
+# Write users settings to a local file
+def write_settings(xml_file_name, ugs_path, ugs_post, ugs_platform, show_operations):
+    if not os.path.isfile(xml_file_name):
+        new_file = open(xml_file_name, 'w')
+        new_file.write('<?xml version="1.0"?>')
+        new_file.write('<' + programID + ' /> ')
         new_file.close()
-        
-        # Open the file and parse as XML        
-        tree = ElementTree.parse(xmlFileName) 
+
+        tree = ElementTree.parse(xml_file_name)
         root = tree.getroot()
-    
-    # Read in the file and get the tree
+
     else:
-        tree = ElementTree.parse(xmlFileName) 
+        tree = ElementTree.parse(xml_file_name)
         root = tree.getroot()
-        
-        # Remove old settings info
         root.remove(root.find('settings'))
-    
-    # Write settings info into XML file
+
     settings = SubElement(root, 'settings')
-    SubElement(settings, 'UGS_path', value = UGS_path)
-    SubElement(settings, 'UGS_post', value = UGS_post)
-    SubElement(settings, 'showOperations', value = showOperations)
-    
-    # Create local boolean value for platform setting    
-    if UGS_platform == True:
-        SubElement(settings, 'UGS_platform', value = 'True')
+    SubElement(settings, 'UGS_path', value=ugs_path)
+    SubElement(settings, 'UGS_post', value=ugs_post)
+    SubElement(settings, 'showOperations', value=show_operations)
+
+    if ugs_platform:
+        SubElement(settings, 'UGS_platform', value='True')
     else:
-        SubElement(settings, 'UGS_platform', value = 'False')
+        SubElement(settings, 'UGS_platform', value='False')
 
-    # Write settings to XML File
-    tree.write(xmlFileName)
+    tree.write(xml_file_name)
 
-# Read in user's local settings 
-# No real error checking done here
-def readSettings(xmlFileName):
-    
-    # Parse settings file as XML
-    tree = ElementTree.parse(xmlFileName) 
+
+def read_settings(xml_filename):
+    tree = ElementTree.parse(xml_filename)
     root = tree.getroot()
 
-    # Find relevant settings
-    UGS_path = root.find('settings/UGS_path').attrib[ 'value' ]
-    UGS_post = root.find('settings/UGS_post').attrib[ 'value' ]
-    UGS_platform_text = root.find('settings/UGS_platform').attrib[ 'value' ]
-    showOperations = root.find('settings/showOperations').attrib[ 'value' ]
-    
-    # Handle booleans in settings
-    if UGS_platform_text == 'True':
-        UGS_platform = True
-    else :
-        UGS_platform = False
+    ugs_path = root.find('settings/UGS_path').attrib['value']
+    ugs_post = root.find('settings/UGS_post').attrib['value']
+    ugs_platform_text = root.find('settings/UGS_platform').attrib['value']
+    show_operations = root.find('settings/showOperations').attrib['value']
 
-    return(UGS_path, UGS_post, UGS_platform, showOperations)
+    if ugs_platform_text == 'True':
+        ugs_platform = True
+    else:
+        ugs_platform = False
+
+    return ugs_path, ugs_post, ugs_platform, show_operations
 
 
-def getToolSpeed(tool_information, tool_preset_id):
+def get_tool_speed(tool_information, tool_preset_id):
     for preset in tool_information['start-values']['presets']:
         if preset['guid'] == tool_preset_id:
             return preset['n']
 
 
-def exportFile(opName, UGS_path, UGS_post, UGS_platform):
-
+def export_file(op_name, ugs_path, ugs_post, ugs_platform):
     app = adsk.core.Application.get()
     doc = app.activeDocument
     products = doc.products
     product = products.itemByProductType('CAMProductType')
     cam = adsk.cam.CAM.cast(product)
-    toPosts = []
-    resultFilenames = []
+    to_posts = []
+    result_filenames = []
     parent_file_count = defaultdict(int)
 
-    # Iterate through CAM objects for operation, folder or setup
     # Currently doesn't handle duplicate in names
     for setup in cam.setups:
-        if setup.name == opName:
-            toPosts += setup
+        if setup.name == op_name:
+            to_posts += setup
         else:
             for folder in setup.folders:
-                if folder.name == opName:
-                    toPosts += folder
-   
+                if folder.name == op_name:
+                    to_posts += folder
+
     for operation in cam.allOperations:
-        if operation.name == opName:
-            toPosts += operation
+        if operation.name == op_name:
+            to_posts += operation
 
-    if opName == "ALL":
+    if op_name == "ALL":
         for operation in cam.allOperations:
-            toPosts.append(operation)
-            
-    # Create a temporary directory for post file
-    # outputFolder = tempfile.mkdtemp()
+            to_posts.append(operation)
 
-    outputFolder = get_folder() + "//output/"
-    
-    # Set the post options        
-    postConfig = os.path.join(cam.genericPostFolder, UGS_post) 
+    output_folder = get_folder() + "//output/"
+
+    post_config = os.path.join(cam.genericPostFolder, ugs_post)
     units = adsk.cam.PostOutputUnitOptions.DocumentUnitsOutput
 
-    for toPost in toPosts:
+    for toPost in to_posts:
         parent_name = toPost.parent.name if toPost.parent is not None else ''
-        outputFolderPost = f"{outputFolder}//{parent_name}"
+        output_folder_post = f"{output_folder}//{parent_name}"
         filename = f"{parent_file_count[parent_name]} - {toPost.name} - {toPost.tool.parameters.itemByName('tool_productId').value.value}_{toPost.tool.parameters.itemByName('tool_diameter').value.value:.3f}{toPost.tool.parameters.itemByName('tool_unit').value.value} ({int(toPost.tool.parameters.itemByName('tool_spindleSpeed').value.value)} rpm)"
-        postInput = adsk.cam.PostProcessInput.create(filename, postConfig, outputFolderPost, units)
-        postInput.isOpenInEditor = False
-        cam.postProcess(toPost, postInput)
+        post_input = adsk.cam.PostProcessInput.create(filename, post_config, output_folder_post, units)
+        post_input.isOpenInEditor = False
+        cam.postProcess(toPost, post_input)
         parent_file_count[parent_name] += 1
 
         # Get the resulting filename
-        resultFilenames += f"{outputFolderPost}/{toPost.name}.nc"
+        result_filenames += f"{output_folder_post}/{toPost.name}.nc"
 
-    return resultFilenames
+    return result_filenames
+
 
 # Get the current values of the command inputs.
-def getInputs(inputs):
-        
-        # Look up name of input and get value
-        UGS_path = inputs.itemById('UGS_path').text
-        UGS_post = inputs.itemById('UGS_post').text
-        UGS_platform = inputs.itemById('UGS_platform').value
-        saveSettings = inputs.itemById('saveSettings').value
-        showOperationsInput = inputs.itemById('showOperations')
-        showOperations = showOperationsInput.selectedItem.name
-        
-        # Only attempt to get a value if the user has made a selection
-        setupInput = inputs.itemById('setups')
-        setupItem = setupInput.selectedItem
-        if setupItem:
-            setupName = setupItem.name
-        
-        folderInput = inputs.itemById('folders')
-        folderItem = folderInput.selectedItem
-        if folderItem:
-            folderName = folderItem.name
-        
-        operationInput = inputs.itemById('operations')
-        operationItem = operationInput.selectedItem
-        if operationItem:
-            operationName = operationItem.name
-        
-        # Get the name of setup, folder, or operation depending on radio selection
-        # This is the operation that will post processed
-        if (showOperations == 'Setups'):
-            opName = setupName
-        elif (showOperations == 'Folders'):
-            opName = folderName
-        elif (showOperations == 'Operations'):
-            opName = operationName
-        elif (showOperations == 'All Operations'):
-            opName = "ALL"
+def get_inputs(inputs):
+    # Look up name of input and get value
+    ugs_path = inputs.itemById('UGS_path').text
+    ugs_post = inputs.itemById('UGS_post').text
+    ugs_platform = inputs.itemById('UGS_platform').value
+    save_settings = inputs.itemById('saveSettings').value
+    show_operations_input = inputs.itemById('showOperations')
+    show_operations = show_operations_input.selectedItem.name
+    op_name = None
 
-        return (opName, UGS_path, UGS_post, UGS_platform, saveSettings, showOperations)
+    # Only attempt to get a value if the user has made a selection
+    setup_input = inputs.itemById('setups')
+    setup_item = setup_input.selectedItem
+    if setup_item:
+        setup_name = setup_item.name
+
+    folder_input = inputs.itemById('folders')
+    folder_item = folder_input.selectedItem
+    if folder_item:
+        folder_name = folder_item.name
+
+    operation_input = inputs.itemById('operations')
+    operation_item = operation_input.selectedItem
+    if operation_item:
+        operation_name = operation_item.name
+
+    # Get the name of setup, folder, or operation depending on radio selection
+    # This is the operation that will post processed
+    if show_operations == 'Setups':
+        op_name = setup_name
+    elif show_operations == 'Folders':
+        op_name = folder_name
+    elif show_operations == 'Operations':
+        op_name = operation_name
+    elif show_operations == 'All Operations':
+        op_name = "ALL"
+
+    return op_name, ugs_path, ugs_post, ugs_platform, save_settings, show_operations
+
 
 # Will update visibility of 3 selection dropdowns based on radio selection
 # Also updates radio selection which is only really useful when command is first launched.
-def setDropdown(inputs, showOperations):
-    
+def set_dropdown(inputs, show_operations):
     # Get input objects
-    setupInput = inputs.itemById('setups')
-    folderInput = inputs.itemById('folders')
-    operationInput = inputs.itemById('operations')
-    showOperationsInput = inputs.itemById('showOperations')
+    setup_input = inputs.itemById('setups')
+    folder_input = inputs.itemById('folders')
+    operation_input = inputs.itemById('operations')
+    show_operations_input = inputs.itemById('showOperations')
 
     # Set visibility based on appropriate selection from radio list
-    if (showOperations == 'Setups'):
-        setupInput.isVisible = True
-        folderInput.isVisible = False
-        operationInput.isVisible = False
-        showOperationsInput.listItems[0].isSelected = True
-    elif (showOperations == 'Folders'):
-        setupInput.isVisible = False
-        folderInput.isVisible = True
-        operationInput.isVisible = False
-        showOperationsInput.listItems[1].isSelected = True
-    elif (showOperations == 'Operations'):
-        setupInput.isVisible = False
-        folderInput.isVisible = False 
-        operationInput.isVisible = True
-        showOperationsInput.listItems[2].isSelected = True
-    elif (showOperations == 'All Operations'):
-        setupInput.isVisible = False
-        folderInput.isVisible = False
-        operationInput.isVisible = False
-        showOperationsInput.listItems[3].isSelected = True
+    if show_operations == 'Setups':
+        setup_input.isVisible = True
+        folder_input.isVisible = False
+        operation_input.isVisible = False
+        show_operations_input.listItems[0].isSelected = True
+    elif show_operations == 'Folders':
+        setup_input.isVisible = False
+        folder_input.isVisible = True
+        operation_input.isVisible = False
+        show_operations_input.listItems[1].isSelected = True
+    elif show_operations == 'Operations':
+        setup_input.isVisible = False
+        folder_input.isVisible = False
+        operation_input.isVisible = True
+        show_operations_input.listItems[2].isSelected = True
+    elif show_operations == 'All Operations':
+        setup_input.isVisible = False
+        folder_input.isVisible = False
+        operation_input.isVisible = False
+        show_operations_input.listItems[3].isSelected = True
     else:
         # TODO add error check
         return
     return
 
-# Define the event handler for when the command is executed 
+
+# Define the event handler for when the command is executed
 class UGSExecutedEventHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
+
     def notify(self, args):
         try:
             # Get the inputs.
             inputs = args.command.commandInputs
-            (opName, UGS_path, UGS_post, UGS_platform, saveSettings, showOperations) = getInputs(inputs)
-            
+            (opName, UGS_path, UGS_post, UGS_platform, saveSettings, showOperations) = get_inputs(inputs)
+
             # Save Settings:
             if saveSettings:
-                xmlFileName = getFileName()
-                writeSettings(xmlFileName, UGS_path, UGS_post, UGS_platform, showOperations)
-            
+                xmlFileName = get_file_name()
+                write_settings(xmlFileName, UGS_path, UGS_post, UGS_platform, showOperations)
+
             # Export the file and launch UGS
-            exportFile(opName, UGS_path, UGS_post, UGS_platform)
-            
+            export_file(opName, UGS_path, UGS_post, UGS_platform)
+
         except:
             app = adsk.core.Application.get()
-            ui  = app.userInterface
+            ui = app.userInterface
             if ui:
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
 
 # Define the event handler for when any input changes.
 class UGSInputChangedHandler(adsk.core.InputChangedEventHandler):
     def __init__(self):
         super().__init__()
+
     def notify(self, args):
         try:
             # Get inputs and changed inputs
@@ -278,154 +252,163 @@ class UGSInputChangedHandler(adsk.core.InputChangedEventHandler):
             # Check to see if the post type has changed and show appropriate drop down
             if input_changed.id == 'showOperations':
                 showOperations = input_changed.selectedItem.name
-                setDropdown(inputs, showOperations)
-                
+                set_dropdown(inputs, showOperations)
+
         except:
             app = adsk.core.Application.get()
-            ui  = app.userInterface
+            ui = app.userInterface
             if ui:
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-               
+
+
 # Define the event handler for when the Octoprint command is run by the user.
 class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
         super().__init__()
+
     def notify(self, args):
         ui = []
         try:
             app = adsk.core.Application.get()
-            ui  = app.userInterface
+            ui = app.userInterface
             doc = app.activeDocument
             products = doc.products
             product = products.itemByProductType('CAMProductType')
-            
+
             # Check if the document has a CAMProductType. It will not if there are no CAM operations in it.
-            if product == None:
-                 ui.messageBox('There are no CAM operations in the active document')
-                 return            
-            # Cast the CAM product to a CAM object (a subtype of product).
+            if product is None:
+                ui.messageBox('There are no CAM operations in the active document')
+                return
+                # Cast the CAM product to a CAM object (a subtype of product).
             cam = adsk.cam.CAM.cast(product)
 
             # Setup Handlers and options for command
             cmd = args.command
-            cmd.isExecutedWhenPreEmpted = False           
-            
-            onExecute = UGSExecutedEventHandler()
-            cmd.execute.add(onExecute)
-            handlers.append(onExecute)
-            
-            onInputChanged = UGSInputChangedHandler()
-            cmd.inputChanged.add(onInputChanged)
-            handlers.append(onInputChanged)
+            cmd.isExecutedWhenPreEmpted = False
+
+            on_execute = UGSExecutedEventHandler()
+            cmd.execute.add(on_execute)
+            handlers.append(on_execute)
+
+            on_input_changed = UGSInputChangedHandler()
+            cmd.inputChanged.add(on_input_changed)
+            handlers.append(on_input_changed)
 
             # Define the inputs.
             inputs = cmd.commandInputs
-            
+
             # Labels
-            inputs.addTextBoxCommandInput('labelText2', '', '<a href="http://winder.github.io/ugs_website/">Universal Gcode Sender</a></span> A full featured gcode platform used for interfacing with advanced CNC controllers like GRBL and TinyG.', 4, True)
+            inputs.addTextBoxCommandInput('labelText2', '',
+                                          '<a href="http://winder.github.io/ugs_website/">Universal Gcode Sender</a></span> A full featured gcode platform used for interfacing with advanced CNC controllers like GRBL and TinyG.',
+                                          4, True)
             inputs.addTextBoxCommandInput('labelText3', '', 'Choose the Setup or Operation to send to UGS', 2, True)
-            
+
             # UGS local path and post information 
-            UGS_path_input = inputs.addTextBoxCommandInput('UGS_path', 'UGS Path: ', 'Location of UGS', 1, False)
-            UGS_post_input = inputs.addTextBoxCommandInput('UGS_post', 'Post to use: ', 'Name of post', 1, False)
-            
+            ugs_path_input = inputs.addTextBoxCommandInput('UGS_path', 'UGS Path: ', 'Location of UGS', 1, False)
+            ugs_post_input = inputs.addTextBoxCommandInput('UGS_post', 'Post to use: ', 'Name of post', 1, False)
+
             # Whether using classic or platform
             # TODO Could automate this based on path
-            UGS_platform_input = inputs.addBoolValueInput("UGS_platform", 'Using UGS Platform?', True)
-            
+            ugs_platform_input = inputs.addBoolValueInput("UGS_platform", 'Using UGS Platform?', True)
+
             # What to select from?  Setups, Folders, Operations?
-            showOperations_input = inputs.addRadioButtonGroupCommandInput("showOperations", 'What to Post?')  
-            radioButtonItems = showOperations_input.listItems
-            radioButtonItems.add("Setups", False)
-            radioButtonItems.add("Folders", False)
-            radioButtonItems.add("Operations", False)
-            radioButtonItems.add("All Operations", False)
+            show_operations_input = inputs.addRadioButtonGroupCommandInput("showOperations", 'What to Post?')
+            radio_button_items = show_operations_input.listItems
+            radio_button_items.add("Setups", False)
+            radio_button_items.add("Folders", False)
+            radio_button_items.add("Operations", False)
+            radio_button_items.add("All Operations", False)
 
             # Drop down for Setups
-            setupDropDown = inputs.addDropDownCommandInput('setups', 'Select Setup:', adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+            setup_drop_down = inputs.addDropDownCommandInput('setups', 'Select Setup:',
+                                                           adsk.core.DropDownStyles.LabeledIconDropDownStyle)
             # Drop down for Folders
-            folderDropDown = inputs.addDropDownCommandInput('folders', 'Select Folder:', adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+            folder_drop_down = inputs.addDropDownCommandInput('folders', 'Select Folder:',
+                                                            adsk.core.DropDownStyles.LabeledIconDropDownStyle)
             # Drop down for Operations
-            opDropDown = inputs.addDropDownCommandInput('operations', 'Select Operation:', adsk.core.DropDownStyles.LabeledIconDropDownStyle)
-        
+            op_drop_down = inputs.addDropDownCommandInput('operations', 'Select Operation:',
+                                                        adsk.core.DropDownStyles.LabeledIconDropDownStyle)
+
             # Populate values in dropdowns based on current document:
             for setup in cam.setups:
-                setupDropDown.listItems.add(setup.name, False)
+                setup_drop_down.listItems.add(setup.name, False)
                 for folder in setup.folders:
-                    folderDropDown.listItems.add(folder.name, False)         
+                    folder_drop_down.listItems.add(folder.name, False)
             for operation in cam.allOperations:
-                opDropDown.listItems.add(operation.name, False)
-                
+                op_drop_down.listItems.add(operation.name, False)
+
             # Save user settings, values written to local computer XML file
             inputs.addBoolValueInput("saveSettings", 'Save settings?', True)
-            
+
             # Defaults for command dialog
             cmd.commandCategoryName = 'UGS'
             cmd.setDialogInitialSize(500, 300)
             cmd.setDialogMinimumSize(500, 300)
-            cmd.okButtonText = 'POST'  
-            
+            cmd.okButtonText = 'POST'
+
             # Check if user has saved settings and update UI to reflect preferences
-            xmlFileName = getFileName()
-            if os.path.isfile(xmlFileName):
-                
+            xml_file_name = get_file_name()
+            if os.path.isfile(xml_file_name):
+
                 # Read Settings                
-                (UGS_path, UGS_post, UGS_platform, showOperations) = readSettings(xmlFileName)
-                
+                (UGS_path, UGS_post, UGS_platform, showOperations) = read_settings(xml_file_name)
+
                 # Update dialog values
-                UGS_path_input.text = UGS_path
-                UGS_post_input.text = UGS_post
-                UGS_platform_input.value = UGS_platform
-                setDropdown(inputs, showOperations)
+                ugs_path_input.text = UGS_path
+                ugs_post_input.text = UGS_post
+                ugs_platform_input.value = UGS_platform
+                set_dropdown(inputs, showOperations)
             else:
-                setDropdown(inputs, 'Folders')
+                set_dropdown(inputs, 'Folders')
 
         except:
             if ui:
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
 
 def run(context):
     ui = None
 
     try:
         app = adsk.core.Application.get()
-        ui  = app.userInterface
+        ui = app.userInterface
 
         if ui.commandDefinitions.itemById('UGSButtonID'):
             ui.commandDefinitions.itemById('UGSButtonID').deleteMe()
 
         # Get the CommandDefinitions collection.
-        cmdDefs = ui.commandDefinitions
+        cmd_defs = ui.commandDefinitions
 
         # Create a button command definition for the comamnd button.  This
         # is also used to display the disclaimer dialog.
         tooltip = '<div style=\'font-family:"Calibri";color:#B33D19; padding-top:-20px;\'><span style=\'font-size:20px;\'><b>winder.github.io/ugs_website</b></span></div>Universal Gcode Sender'
-        UGSButtonDef = cmdDefs.addButtonDefinition('UGSButtonID', 'Post to UGS', tooltip, './/Resources')
-        onUGSCreated = UGSCreatedEventHandler()
-        UGSButtonDef.commandCreated.add(onUGSCreated)
-        handlers.append(onUGSCreated)
+        ugs_button_def = cmd_defs.addButtonDefinition('UGSButtonID', 'Post to UGS', tooltip, './/Resources')
+        on_ugs_created = UGSCreatedEventHandler()
+        ugs_button_def.commandCreated.add(on_ugs_created)
+        handlers.append(on_ugs_created)
 
         # Find the "ADD-INS" panel for the solid and the surface workspaces.
-        solidPanel = ui.allToolbarPanels.itemById('CAMActionPanel')
-        
+        solid_panel = ui.allToolbarPanels.itemById('CAMActionPanel')
+
         # Add a button for the "Request Quotes" command into both panels.
-        solidPanel.controls.addCommand(UGSButtonDef, '', False)
+        solid_panel.controls.addCommand(ugs_button_def, '', False)
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
 
 def stop(context):
     ui = None
     try:
         app = adsk.core.Application.get()
-        ui  = app.userInterface
+        ui = app.userInterface
 
         if ui.commandDefinitions.itemById('UGSButtonID'):
             ui.commandDefinitions.itemById('UGSButtonID').deleteMe()
 
         # Find the controls in the solid and surface panels and delete them.
-        camPanel = ui.allToolbarPanels.itemById('CAMActionPanel')
-        cntrl = camPanel.controls.itemById('UGSButtonID')
+        cam_panel = ui.allToolbarPanels.itemById('CAMActionPanel')
+        cntrl = cam_panel.controls.itemById('UGSButtonID')
         if cntrl:
             cntrl.deleteMe()
 
@@ -433,5 +416,3 @@ def stop(context):
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-
