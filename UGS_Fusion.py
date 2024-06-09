@@ -3,6 +3,7 @@
 import json
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from os.path import expanduser
 import adsk.core
 import adsk.fusion
@@ -13,6 +14,22 @@ handlers = []
 
 # Global Program ID for settings
 programID = 'UGS_Fusion'
+
+
+@dataclass
+class Settings:
+    ugs_path: str
+    ugs_post: str
+    ugs_platform: bool
+    show_operations: str
+    output_folder: str
+
+    def to_json(self):
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__, 
+            sort_keys=True,
+            indent=4)
 
 
 def get_folder():
@@ -31,22 +48,16 @@ def get_file_name():
     return home + 'settings.json'
 
 
-def write_settings(filename, ugs_path, ugs_post, ugs_platform, show_operations):
-    settings = {
-        'ugs_path': ugs_path,
-        'ugs_post': ugs_post,
-        'ugs_platform': ugs_platform,
-        'show_operations': show_operations
-    }
+def write_settings(filename, settings):
     with open(filename, 'w') as file:
-        json.dump(settings, file)
+        file.write(settings.to_json())
 
 
 def read_settings(filename):
     with open(filename, 'r') as file:
         settings = json.load(file)
 
-    return settings['ugs_path'], settings['ugs_post'], settings['ugs_platform'], settings['show_operations']
+    return Settings(**settings)
 
 
 def get_tool_speed(tool_information, tool_preset_id):
@@ -55,7 +66,7 @@ def get_tool_speed(tool_information, tool_preset_id):
             return preset['n']
 
 
-def export_file(op_name, ugs_path, ugs_post, ugs_platform):
+def export_file(op_name, settings):
     app = adsk.core.Application.get()
     doc = app.activeDocument
     products = doc.products
@@ -68,29 +79,33 @@ def export_file(op_name, ugs_path, ugs_post, ugs_platform):
     # Currently doesn't handle duplicate in names
     for setup in cam.setups:
         if setup.name == op_name:
-            to_posts += setup
+            to_posts.append(setup)
         else:
             for folder in setup.folders:
                 if folder.name == op_name:
-                    to_posts += folder
+                    to_posts.append(folder)
 
     for operation in cam.allOperations:
         if operation.name == op_name:
-            to_posts += operation
+            to_posts.append(operation)
 
     if op_name == "ALL":
         for operation in cam.allOperations:
             to_posts.append(operation)
 
-    output_folder = get_folder() + "//output/"
-
-    post_config = os.path.join(cam.genericPostFolder, ugs_post)
+    post_config = os.path.join(cam.genericPostFolder, settings.ugs_post)
     units = adsk.cam.PostOutputUnitOptions.DocumentUnitsOutput
 
     for toPost in to_posts:
         parent_name = toPost.parent.name if toPost.parent is not None else ''
-        output_folder_post = f"{output_folder}//{parent_name}"
-        filename = f"{parent_file_count[parent_name]} - {toPost.name} - {toPost.tool.parameters.itemByName('tool_productId').value.value}_{toPost.tool.parameters.itemByName('tool_diameter').value.value:.3f}{toPost.tool.parameters.itemByName('tool_unit').value.value} ({int(toPost.tool.parameters.itemByName('tool_spindleSpeed').value.value)} rpm)"
+        output_folder_post = f"{settings.output_folder}//{parent_name}"
+        filename = (f"{parent_file_count[parent_name]}"
+                    f" - {toPost.name}"
+                    f" - {toPost.tool.parameters.itemByName('tool_productId').value.value}"
+                    f"_{toPost.tool.parameters.itemByName('tool_diameter').value.value:.3f}"
+                    f"{toPost.tool.parameters.itemByName('tool_unit').value.value} "
+                    f"({int(toPost.tool.parameters.itemByName('tool_spindleSpeed').value.value)} rpm)")
+
         post_input = adsk.cam.PostProcessInput.create(filename, post_config, output_folder_post, units)
         post_input.isOpenInEditor = False
         cam.postProcess(toPost, post_input)
@@ -104,13 +119,16 @@ def export_file(op_name, ugs_path, ugs_post, ugs_platform):
 
 # Get the current values of the command inputs.
 def get_inputs(inputs):
-    # Look up name of input and get value
-    ugs_path = inputs.itemById('UGS_path').text
-    ugs_post = inputs.itemById('UGS_post').text
-    ugs_platform = inputs.itemById('UGS_platform').value
-    save_settings = inputs.itemById('saveSettings').value
     show_operations_input = inputs.itemById('showOperations')
-    show_operations = show_operations_input.selectedItem.name
+
+    settings = Settings(ugs_path=inputs.itemById('UGS_path').text,
+                        ugs_post=inputs.itemById('UGS_post').text,
+                        ugs_platform=inputs.itemById('UGS_platform').value,
+                        output_folder=inputs.itemById('outputFolder').text,
+                        show_operations=show_operations_input.selectedItem.name
+                        )
+
+    save_settings = inputs.itemById('saveSettings').value
     op_name = None
 
     # Only attempt to get a value if the user has made a selection
@@ -131,16 +149,16 @@ def get_inputs(inputs):
 
     # Get the name of setup, folder, or operation depending on radio selection
     # This is the operation that will post processed
-    if show_operations == 'Setups':
+    if settings.show_operations == 'Setups' and setup_item:
         op_name = setup_name
-    elif show_operations == 'Folders':
+    elif settings.show_operations == 'Folders':
         op_name = folder_name
-    elif show_operations == 'Operations':
+    elif settings.show_operations == 'Operations':
         op_name = operation_name
-    elif show_operations == 'All Operations':
+    elif settings.show_operations == 'All Operations':
         op_name = "ALL"
 
-    return op_name, ugs_path, ugs_post, ugs_platform, save_settings, show_operations
+    return op_name, settings, save_settings
 
 
 # Will update visibility of 3 selection dropdowns based on radio selection
@@ -188,15 +206,15 @@ class UGSExecutedEventHandler(adsk.core.CommandEventHandler):
         try:
             # Get the inputs.
             inputs = args.command.commandInputs
-            (opName, UGS_path, UGS_post, UGS_platform, saveSettings, showOperations) = get_inputs(inputs)
+            op_name, settings, save_settings = get_inputs(inputs)
 
             # Save Settings:
-            if saveSettings:
+            if save_settings:
                 settings_filename = get_file_name()
-                write_settings(settings_filename, UGS_path, UGS_post, UGS_platform, showOperations)
+                write_settings(settings_filename, settings)
 
             # Export the file and launch UGS
-            export_file(opName, UGS_path, UGS_post, UGS_platform)
+            export_file(op_name, settings)
 
         except:
             app = adsk.core.Application.get()
@@ -273,6 +291,8 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             # UGS local path and post information
             ugs_path_input = inputs.addTextBoxCommandInput('UGS_path', 'UGS Path: ', 'Location of UGS', 1, False)
             ugs_post_input = inputs.addTextBoxCommandInput('UGS_post', 'Post to use: ', 'Name of post', 1, False)
+            output_folder_input = inputs.addTextBoxCommandInput('outputFolder', 'Output folder: ',
+                                                                'Path to output folder', 1, False)
 
             # Whether using classic or platform
             # TODO Could automate this based on path
@@ -304,8 +324,8 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             for operation in cam.allOperations:
                 op_drop_down.listItems.add(operation.name, False)
 
-            # Save user settings, values written to local computer XML file
-            inputs.addBoolValueInput("saveSettings", 'Save settings?', True)
+            # Save user settings
+            inputs.addBoolValueInput("saveSettings", 'Save entered settings?', True)
 
             # Defaults for command dialog
             cmd.commandCategoryName = 'UGS'
@@ -316,14 +336,17 @@ class UGSCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             # Check if user has saved settings and update UI to reflect preferences
             settings_file_name = get_file_name()
             if os.path.isfile(settings_file_name):
-                (UGS_path, UGS_post, UGS_platform, showOperations) = read_settings(settings_file_name)
+                settings = read_settings(settings_file_name)
 
                 # Update dialog values
-                ugs_path_input.text = UGS_path
-                ugs_post_input.text = UGS_post
-                ugs_platform_input.value = UGS_platform
-                set_dropdown(inputs, showOperations)
+                ugs_path_input.text = settings.ugs_path
+                ugs_post_input.text = settings.ugs_post
+                ugs_platform_input.value = settings.ugs_platform
+                output_folder_input.text = settings.output_folder
+                set_dropdown(inputs, settings.show_operations)
             else:
+                ugs_post_input.text = 'grbl.cps'
+                output_folder_input.text = f'{get_folder()}/output/'
                 set_dropdown(inputs, 'Folders')
 
         except:
